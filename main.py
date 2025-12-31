@@ -4,6 +4,7 @@ from langgraph.graph import StateGraph, START, END
 from typing import TypedDict, Annotated
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph.message import add_messages
 from dotenv import load_dotenv
@@ -12,12 +13,12 @@ import os
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_mcp_adapters.client import MultiServerMCPClient
 import asyncio
-
+load_dotenv()
 # Fix for Windows event loop - MUST be before asyncio.run()
 if os.name == 'nt':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-client = MultiServerMCPClient(
+client1 = MultiServerMCPClient(
     {
         "arthm": {
             "transport": 'stdio',
@@ -27,8 +28,25 @@ client = MultiServerMCPClient(
     }
 )
 
+client2 = MultiServerMCPClient(
+    {
+        "rag": {
+            "transport": 'stdio',
+            "command": 'A:\\AI_Projects\\AI Conversational Agent\\.venv\\Scripts\\python.exe',  # Use venv Python
+            "args": ['A:\\AI_Projects\\AI Conversational Agent\\rag_server.py']
+        }
+    }
+)
 
-load_dotenv()
+client3 = MultiServerMCPClient(
+    {
+        "calc": {
+            "transport": 'stdio',
+            "command": 'A:\\AI_Projects\\AI Conversational Agent\\.venv\\Scripts\\python.exe',  # Use venv Python
+            "args": ['A:\\AI_Projects\\AI Conversational Agent\\calc_server.py']
+        }
+    }
+)
 
 # -------------------
 # 0. Create threads 
@@ -54,10 +72,8 @@ async def get_all_threads(checkpointer):
 # -------------------
 # 2. LLM
 # -------------------
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile", 
-    temperature=0.7
-)
+# llm = ChatGroq(model="llama-3.3-70b-versatile",temperature=0.7)
+llm = ChatGoogleGenerativeAI(model='gemini-2.5-flash-lite', temperature=0.7)
 
 # -------------------
 # 3. State
@@ -71,9 +87,12 @@ class ChatState(TypedDict):
     
 async def main():
 
-    tools = await client.get_tools()
+    tool1 = await client1.get_tools()
+    tool2 = await client2.get_tools()
+    tool3 = await client3.get_tools()
+    tools = tool1 + tool2 + tool3
 
-    print(tools)
+    # print(tools)
 
     llm_binding_tool = llm.bind_tools(tools)
 
@@ -82,10 +101,18 @@ async def main():
         messages = state["messages"]
         response = await llm_binding_tool.ainvoke(messages)
 
-        # Log if tool calls are requested
+        # Check if the AI response includes tool/function calls
         if hasattr(response, 'tool_calls') and response.tool_calls:
-            print(f"\n🔧 Tool calls requested: {[tc['name'] for tc in response.tool_calls]}\n")
-        
+            # Get list of all tool names being called
+            tool_names = []
+            for tool_call in response.tool_calls:
+                tool_names.append(tool_call['name'])
+            
+            # Create a friendly message
+            tools_text = ', '.join(tool_names)
+            print(f"\n🔧 The AI is using these tools: {tools_text}\n")
+            print(f"   Total tools being used: {len(tool_names)}\n")
+
         return {"messages": [response]}
 
     tool_node = ToolNode(tools) if tools else None
@@ -93,7 +120,7 @@ async def main():
     # -------------------
     # 5. Database URI
     # -------------------
-    DB_URI = "postgresql://postgres:password@localhost:5432/new_database"
+    DB_URI = "postgresql://postgres:password@localhost:5432/thread_database"
 
     # -------------------
     # 6. Use within context manager
