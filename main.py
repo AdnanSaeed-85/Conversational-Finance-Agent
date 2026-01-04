@@ -2,12 +2,13 @@
 
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict, Annotated
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_groq import ChatGroq
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph.message import add_messages
 from dotenv import load_dotenv
+from langgraph.types import Command, interrupt
 import uuid
 import os
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -23,7 +24,7 @@ client1 = MultiServerMCPClient(
         "arthm": {
             "transport": 'stdio',
             "command": 'A:\\AI_Projects\\AI Conversational Agent\\.venv\\Scripts\\python.exe',  # Use venv Python
-            "args": ['A:\\AI_Projects\\AI Conversational Agent\\mcp_server.py']
+            "args": ['A:\\AI_Projects\\AI Conversational Agent\\expense_mcp_server.py']
         }
     }
 )
@@ -33,7 +34,7 @@ client2 = MultiServerMCPClient(
         "rag": {
             "transport": 'stdio',
             "command": 'A:\\AI_Projects\\AI Conversational Agent\\.venv\\Scripts\\python.exe',  # Use venv Python
-            "args": ['A:\\AI_Projects\\AI Conversational Agent\\rag_server.py']
+            "args": ['A:\\AI_Projects\\AI Conversational Agent\\rag_mcp_server.py']
         }
     }
 )
@@ -43,7 +44,17 @@ client3 = MultiServerMCPClient(
         "calc": {
             "transport": 'stdio',
             "command": 'A:\\AI_Projects\\AI Conversational Agent\\.venv\\Scripts\\python.exe',  # Use venv Python
-            "args": ['A:\\AI_Projects\\AI Conversational Agent\\calc_server.py']
+            "args": ['A:\\AI_Projects\\AI Conversational Agent\\calc_mcp_server.py']
+        }
+    }
+)
+
+client4 = MultiServerMCPClient(
+    {
+        'for_stock': {
+            'transport': 'stdio',
+            "command": 'A:\\AI_Projects\\AI Conversational Agent\\.venv\\Scripts\\python.exe',  # Use venv Python
+            "args": ['A:\\AI_Projects\\AI Conversational Agent\\stocks_mcp_server.py']
         }
     }
 )
@@ -90,7 +101,8 @@ async def main():
     tool1 = await client1.get_tools()
     tool2 = await client2.get_tools()
     tool3 = await client3.get_tools()
-    tools = tool1 + tool2 + tool3
+    tool4 = await client4.get_tools()
+    tools = tool1 + tool2 + tool3 + tool4
 
     # print(tools)
 
@@ -103,6 +115,18 @@ async def main():
 
         # Check if the AI response includes tool/function calls
         if hasattr(response, 'tool_calls') and response.tool_calls:
+            # Check for buy_stock_for_me and interrupt for approval
+            for tc in response.tool_calls:
+                if tc['name'] == 'buy_stock_for_me':
+                    args = tc.get('args', {})
+                    symbol = args.get('symbol', 'unknown')
+                    quantity = args.get('quantity', 0)
+                    decision = interrupt(f"Approve buying {quantity} shares of {symbol}? (yes/no)")
+                    if isinstance(decision, str) and decision.strip().lower() == 'no':
+                        return {"messages": [response, AIMessage(content=f"Purchase of {quantity} shares of {symbol} cancelled by human.")]}
+                    # If yes, proceed with tool execution
+                    break
+            
             # Get list of all tool names being called
             tool_names = []
             for tool_call in response.tool_calls:
@@ -213,8 +237,17 @@ async def main():
                 config=config
             )
             
+            interrupts = response.get("__interrupt__", [])
+            if interrupts:
+                prompt_to_human = interrupts[0].value
+                print(f"HITL: {prompt_to_human}")
+                decision = input('your decision: ').strip().lower()
+                result = await chatbot.ainvoke(Command(resume=decision), config=config)
+            else:
+                result = response
+
             # Get the last message (the assistant's response)
-            assistant_message = response['messages'][-1].content
+            assistant_message = result['messages'][-1].content
             print(f"🤖: {assistant_message}\n")
 
 
