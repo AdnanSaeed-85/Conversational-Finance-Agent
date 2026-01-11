@@ -15,3 +15,8 @@ old_main_1.py
 old_main_2.py
 uv.lock
 faiss_index
+
+CONFIG.py
+docker-compose.yml
+pyproject.toml
+uv.lock
